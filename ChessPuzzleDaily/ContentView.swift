@@ -1,46 +1,33 @@
 import SwiftUI
 
-/// Placeholder screen for the initial scaffold — proves the ported chess engine and puzzle
-/// core compile and run correctly. Replaced by the real board/screens in a follow-up pass.
+/// App root: owns the long-lived store/controller and loads the bundled puzzle database,
+/// then hands off to `RootView` (the ported Screens.kt `App(c)` composable).
 struct ContentView: View {
-    @State private var selfCheck: String = "Running engine self-check…"
+    @StateObject private var controller: GameController
+    private let store: ProgressStore
 
-    var body: some View {
-        VStack(spacing: 16) {
-            Text("♟ Шахматная задача — Ход дня")
-                .font(.title2).bold()
-            Text("iOS port scaffold")
-                .foregroundStyle(.secondary)
-            Text(selfCheck)
-                .font(.callout)
-                .multilineTextAlignment(.center)
-                .padding()
-        }
-        .padding()
-        .onAppear { selfCheck = runSelfCheck() }
+    init() {
+        let store = ProgressStore()
+        self.store = store
+        _controller = StateObject(wrappedValue: GameController(store: store, sound: SoundManager(muted: store.muted)))
     }
 
-    /// Exercises the ported engine on a couple of known positions so a build/run instantly
-    /// surfaces a translation mistake rather than failing silently deep in a puzzle later.
-    private func runSelfCheck() -> String {
-        let start = Position.fromFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
-        let startMoves = start.legalMoves().count // expected 20
-
-        // Scholar's mate puzzle-style check: back-rank mate in 1 for white.
-        // 6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1 → Ra8#
-        let mateIn1 = Position.fromFen("6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1")
-        var m = mateIn1.moveFromUci("a1a8")!
-        let san = mateIn1.san(m)
-        mateIn1.apply(&m)
-        let isMate = mateIn1.isCheckmate()
-
-        let dailyNumberToday = Daily.numberFor(Calendar0.daysFromCivil(2026, 10, 15))
-
-        return """
-        Legal moves from start position: \(startMoves) (expect 20)
-        Mate-in-1 SAN: \(san) (expect Ra8#), checkmate: \(isMate)
-        Daily puzzle # for 2026-10-15: \(dailyNumberToday)
-        """
+    var body: some View {
+        RootView(c: controller)
+            .preferredColorScheme(.dark)
+            .task {
+                guard controller.db == nil, let url = Bundle.main.url(forResource: "puzzles", withExtension: "json") else { return }
+                do {
+                    let data = try Data(contentsOf: url)
+                    let db = try await Task.detached(priority: .userInitiated) { try PuzzleDb.parse(data) }.value
+                    controller.db = db
+                } catch {
+                    // Falls back to an empty puzzle list; Home/Splash guard against a nil db already.
+                    #if DEBUG
+                    print("puzzles.json failed to parse: \(error)")
+                    #endif
+                }
+            }
     }
 }
 
