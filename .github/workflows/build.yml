@@ -38,10 +38,6 @@ jobs:
     name: Build & export signed IPA
     runs-on: macos-26
     needs: build
-    # Skips gracefully (instead of failing) until the signing secrets below are added in
-    # GitHub repo Settings → Secrets and variables → Actions — same recipe already proven
-    # working for the MyOffice/MyFamilyTree iOS CI pipelines.
-    if: ${{ secrets.BUILD_CERTIFICATE_BASE64 != '' }}
     env:
       TEAM_ID: UWM7LPNBH6
       BUNDLE_ID: com.aries-rst.chesspuzzledaily.app
