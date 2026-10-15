@@ -5,13 +5,35 @@ import Foundation
 
 struct DayResult: Codable, Equatable { var status: String; var grid: String; var attempts: Int } // status: progress | solved | failed
 
-/// Supported UI languages. Only Russian and English are translated in this build; the
-/// Kotlin original ports 17 languages (see Lang.kt/LangAsia.kt/LangMore.kt) — porting the
-/// rest is a mechanical follow-up, not a redesign.
+/// Supported UI languages — full 17-language set, matching the Kotlin original
+/// (Lang.kt + LangAsia.kt + LangMore.kt).
 enum Lang: String, CaseIterable {
-    case ru, en
-    var native: String { self == .ru ? "Русский" : "English" }
-    var rtl: Bool { false }
+    case ru, en, uz, kk, tr, es, pt, fr, de, id, hi, ar, fa, ja, ko
+    case zh = "zh-CN"
+    case zhTW = "zh-TW"
+
+    var native: String {
+        switch self {
+        case .ru: return "Русский"
+        case .en: return "English"
+        case .uz: return "O‘zbekcha"
+        case .kk: return "Қазақша"
+        case .tr: return "Türkçe"
+        case .es: return "Español"
+        case .pt: return "Português"
+        case .fr: return "Français"
+        case .de: return "Deutsch"
+        case .id: return "Bahasa Indonesia"
+        case .hi: return "हिन्दी"
+        case .ar: return "العربية"
+        case .fa: return "فارسی"
+        case .ja: return "日本語"
+        case .ko: return "한국어"
+        case .zh: return "简体中文"
+        case .zhTW: return "繁體中文"
+        }
+    }
+    var rtl: Bool { self == .ar || self == .fa }
     static func of(_ code: String?) -> Lang? { Lang.allCases.first { $0.rawValue == code } }
 }
 

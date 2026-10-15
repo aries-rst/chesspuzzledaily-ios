@@ -120,9 +120,10 @@ final class GameController: ObservableObject {
         pendingChallenge = nil; startChallenge(id); return session != nil
     }
     func goHome() { sound.click(); go(.home) }
-    func setLanguage(_ l: Lang) { store.setLang(l); lang = l; tick += 1 }
+    func setLanguage(_ l: Lang) { store.setLang(l); lang = l; tick += 1; onLanguageChanged(l) }
     func toggleMute() { muted.toggle(); store.setMuted(muted); sound.muted = muted; if !muted { sound.click() } }
     var onNotifyChanged: (Bool) -> Void = { _ in }
+    var onLanguageChanged: (Lang) -> Void = { _ in }
     func setNotify(_ v: Bool) { store.setNotify(v); onNotifyChanged(v); tick += 1 }
 
     private func stopPuzzle() { puzzleTask?.cancel(); puzzleTask = nil; inputOn = false; promotionChoices = nil }

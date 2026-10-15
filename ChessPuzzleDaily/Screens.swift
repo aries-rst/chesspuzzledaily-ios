@@ -188,16 +188,17 @@ struct SplashScreen: View {
 struct LangScreen: View {
     @ObservedObject var c: GameController
     var body: some View {
-        VStack(spacing: 10) {
-            Spacer()
-            Text("🌐 Выберите язык · Choose language").foregroundColor(TEXT).font(.system(size: 20, weight: .bold))
-                .multilineTextAlignment(.center).frame(maxWidth: .infinity)
-            ForEach(Lang.allCases, id: \.self) { l in
-                AltButton(text: l.native) { c.setLanguage(l); c.sound.click(); c.go(.home) }
+        ScrollView {
+            VStack(spacing: 10) {
+                Text("🌐 Выберите язык · Choose language").foregroundColor(TEXT).font(.system(size: 20, weight: .bold))
+                    .multilineTextAlignment(.center).frame(maxWidth: .infinity)
+                ForEach(Lang.allCases, id: \.self) { l in
+                    AltButton(text: l.native) { c.setLanguage(l); c.sound.click(); c.go(.home) }
+                }
             }
-            Spacer()
+            .padding(24).frame(maxWidth: .infinity)
         }
-        .padding(24).frame(maxWidth: .infinity, maxHeight: .infinity).background(BG)
+        .frame(maxWidth: .infinity, maxHeight: .infinity).background(BG)
     }
 }
 

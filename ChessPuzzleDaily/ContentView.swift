@@ -9,13 +9,19 @@ struct ContentView: View {
     init() {
         let store = ProgressStore()
         self.store = store
-        _controller = StateObject(wrappedValue: GameController(store: store, sound: SoundManager(muted: store.muted)))
+        let c = GameController(store: store, sound: SoundManager(muted: store.muted))
+        c.onNotifyChanged = { _ in Reminder.apply(store: store) }
+        c.onLanguageChanged = { _ in Reminder.apply(store: store) }
+        _controller = StateObject(wrappedValue: c)
     }
 
     var body: some View {
         RootView(c: controller)
             .preferredColorScheme(.dark)
             .task {
+                // Re-arms the daily reminder on every launch too: iOS can drop a pending
+                // notification request (reinstall, OS cleanup) without telling the app.
+                Reminder.apply(store: store)
                 guard controller.db == nil, let url = Bundle.main.url(forResource: "puzzles", withExtension: "json") else { return }
                 do {
                     let data = try Data(contentsOf: url)
