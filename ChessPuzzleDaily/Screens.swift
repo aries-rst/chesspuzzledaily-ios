@@ -272,6 +272,8 @@ struct HomeScreen: View {
                 }
                 Text(s.credit).foregroundColor(Color(red: 0x7D / 255, green: 0x6E / 255, blue: 0x58 / 255)).font(.system(size: 11))
                     .multilineTextAlignment(.center).frame(maxWidth: .infinity).padding(.top, 12)
+                Spacer().frame(height: 8)
+                BannerAdView()
             }
         )
     }

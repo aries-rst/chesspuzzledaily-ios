@@ -22,6 +22,7 @@ struct ContentView: View {
                 // Re-arms the daily reminder on every launch too: iOS can drop a pending
                 // notification request (reinstall, OS cleanup) without telling the app.
                 Reminder.apply(store: store)
+                AdsInit.start() // no-op while `adsEnabled` is false (see Ads.swift)
                 guard controller.db == nil, let url = Bundle.main.url(forResource: "puzzles", withExtension: "json") else { return }
                 do {
                     let data = try Data(contentsOf: url)
