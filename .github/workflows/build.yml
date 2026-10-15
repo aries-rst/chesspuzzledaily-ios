@@ -38,9 +38,14 @@ jobs:
     name: Build & export signed IPA
     runs-on: macos-26
     needs: build
-    # Skips gracefully (instead of failing) until the three App Store Connect API key secrets
-    # below are added in GitHub repo Settings → Secrets and variables → Actions.
-    if: ${{ secrets.APP_STORE_CONNECT_KEY_ID != '' }}
+    # Skips gracefully (instead of failing) until the signing secrets below are added in
+    # GitHub repo Settings → Secrets and variables → Actions — same recipe already proven
+    # working for the MyOffice/MyFamilyTree iOS CI pipelines.
+    if: ${{ secrets.BUILD_CERTIFICATE_BASE64 != '' }}
+    env:
+      TEAM_ID: UWM7LPNBH6
+      BUNDLE_ID: com.aries-rst.chesspuzzledaily.app
+      PROFILE_NAME: "ChessPuzzleDaily App Store"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -57,19 +62,31 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: Write App Store Connect API key to disk
+      - name: Import signing certificate & provisioning profile
         env:
-          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
-          ASC_KEY_CONTENT: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          BUILD_PROVISION_PROFILE_BASE64: ${{ secrets.BUILD_PROVISION_PROFILE_BASE64 }}
         run: |
-          mkdir -p "$RUNNER_TEMP/private_keys"
-          echo "$ASC_KEY_CONTENT" > "$RUNNER_TEMP/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          CERT_PATH="$RUNNER_TEMP/certificate.p12"
+          PP_PATH="$RUNNER_TEMP/profile.mobileprovision"
+          KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD=$(uuidgen)
 
-      - name: Archive (automatic signing via App Store Connect API key)
-        env:
-          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
-          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
-          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o "$CERT_PATH"
+          echo -n "$BUILD_PROVISION_PROFILE_BASE64" | base64 --decode -o "$PP_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed 's/"//g')
+
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp "$PP_PATH" ~/Library/MobileDevice/Provisioning\ Profiles/
+
+      - name: Archive (manual signing)
         run: |
           xcodebuild archive \
             -project ChessPuzzleDaily.xcodeproj \
@@ -77,16 +94,12 @@ jobs:
             -configuration Release \
             -archivePath "$RUNNER_TEMP/ChessPuzzleDaily.xcarchive" \
             -destination 'generic/platform=iOS' \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$RUNNER_TEMP/private_keys/AuthKey_${ASC_KEY_ID}.p8" \
-            -authenticationKeyID "$ASC_KEY_ID" \
-            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="$TEAM_ID" \
-            CODE_SIGN_STYLE=Automatic
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME"
 
       - name: Write ExportOptions.plist
-        env:
-          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
@@ -98,7 +111,14 @@ jobs:
             <key>teamID</key>
             <string>$TEAM_ID</string>
             <key>signingStyle</key>
-            <string>automatic</string>
+            <string>manual</string>
+            <key>signingCertificate</key>
+            <string>Apple Distribution</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>$BUNDLE_ID</key>
+              <string>$PROFILE_NAME</string>
+            </dict>
             <key>uploadSymbols</key>
             <true/>
           </dict>
@@ -106,18 +126,11 @@ jobs:
           PLIST
 
       - name: Export .ipa
-        env:
-          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
-          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
         run: |
           xcodebuild -exportArchive \
             -archivePath "$RUNNER_TEMP/ChessPuzzleDaily.xcarchive" \
             -exportPath "$RUNNER_TEMP/ipa" \
-            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$RUNNER_TEMP/private_keys/AuthKey_${ASC_KEY_ID}.p8" \
-            -authenticationKeyID "$ASC_KEY_ID" \
-            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist"
 
       - name: Upload .ipa artifact
         uses: actions/upload-artifact@v4
@@ -125,3 +138,7 @@ jobs:
           name: ChessPuzzleDaily-ipa
           path: ${{ runner.temp }}/ipa/*.ipa
           retention-days: 30
+
+      - name: Clean up temporary keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
