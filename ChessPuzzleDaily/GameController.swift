@@ -5,7 +5,7 @@ import SwiftUI
 // Kotlin/Compose original. Coroutines + delay() become Swift structured concurrency
 // (Task + Task.sleep); mutableStateOf becomes @Published.
 
-enum Screen { case splash, lang, home, puzzle, archive, stats, settings, lessons, achievements }
+enum Screen { case splash, lang, home, puzzle, archive, stats, settings, lessons, achievements, premium, netLobby, netGame }
 enum Mode { case daily, train, challenge, rush, lesson }
 enum MsgKind { case neutral, ok, bad }
 
@@ -30,6 +30,8 @@ struct ResultUi: Equatable {
 final class GameController: ObservableObject {
     let store: ProgressStore
     let sound: SoundManager
+    let premium = PremiumStore.shared
+    let netPlay = NetPlayManager()
 
     @Published var screen: Screen = .splash
     @Published private(set) var lang: Lang
@@ -39,7 +41,6 @@ final class GameController: ObservableObject {
     @Published var privacyRequired = false
     @Published var tick = 0
 
-    // ----- board state -----
     private let model = BoardModel()
     @Published private(set) var pieces: [BoardPiece] = []
     @Published private(set) var flip = false
@@ -52,7 +53,6 @@ final class GameController: ObservableObject {
     @Published private(set) var shake = 0
     @Published private(set) var promotionChoices: [Move]? = nil
 
-    // ----- puzzle state -----
     @Published private(set) var mode: Mode = .daily
     @Published private(set) var title = ""
     @Published private(set) var goal = ""
@@ -84,13 +84,19 @@ final class GameController: ObservableObject {
         return Daily.numberFor(Calendar0.daysFromCivil(c.year ?? 2026, c.month ?? 1, c.day ?? 1))
     }
 
-    // ---------------- navigation ----------------
     func go(_ target: Screen) {
-        stopPuzzle(); stopRush(); screen = target; tick += 1
+        stopPuzzle(); stopRush()
+        if (screen == .netLobby || screen == .netGame) && target != .netLobby && target != .netGame { netPlay.stop() }
+        screen = target; tick += 1
         if target == .home { checkFreeze() }
     }
 
-    // ---------------- streak freeze ----------------
+    func openNetPlay() {
+        sound.click()
+        netPlay.boardTheme = boardTheme
+        go(premium.isPremium ? .netLobby : .premium)
+    }
+
     @Published private(set) var freezeOffer: Int? = nil
     private var freezeAskedToday = -1
     private func checkFreeze() {
@@ -104,13 +110,12 @@ final class GameController: ObservableObject {
     func acceptFreeze() {
         freezeOffer = nil
         RewardedAdManager.show { [weak self] in
-            guard let self else { return }
-            self.store.applyFreeze(self.today()); self.sound.solved(); self.tick += 1
-        }
+                                guard let self else { return }
+                                self.store.applyFreeze(self.today()); self.sound.solved(); self.tick += 1
+                               }
     }
     func declineFreeze() { freezeOffer = nil; store.declineFreeze(); tick += 1 }
 
-    // ---------------- hooks for app-level features ----------------
     var onReviewMilestone: () -> Void = {}
     @Published var sharePayload: SharePayload? = nil
     @Published var pendingChallenge: String? = nil
@@ -134,7 +139,6 @@ final class GameController: ObservableObject {
     private func sleep(_ ms: Int) async { try? await Task.sleep(nanoseconds: UInt64(ms) * 1_000_000) }
     private func say(_ text: String, _ kind: MsgKind = .neutral) { msg = text; msgKind = kind }
 
-    // ---------------- board helpers ----------------
     private func syncMarks() {
         guard let ses = session else { return }
         checkSq = ses.pos.inCheck() ? ses.pos.kingSq(ses.pos.turn) : -1
@@ -154,7 +158,6 @@ final class GameController: ObservableObject {
     }
     private func loadBoard(_ pos: Position) { model.load(pos); pieces = model.pieces; syncMarks() }
 
-    // ---------------- puzzle lifecycle ----------------
     private func setup(_ rec: PuzzleRec, _ m: Mode) {
         stopPuzzle()
         let ses = PuzzleSession(rec); session = ses
@@ -166,17 +169,17 @@ final class GameController: ObservableObject {
         say(s.opponentMoves)
         screen = .puzzle
         launchP { [weak self] in
-            guard let self else { return }
-            await self.sleep(m == .rush ? 300 : 650)
-            if Task.isCancelled { return }
-            let mover = ses.pos.turn
-            let mv = ses.playSetup(); self.animate(mv, self.promotedPiece(mv, mover))
-            self.awaitPlayer()
-        }
+                 guard let self else { return }
+                 await self.sleep(m == .rush ? 300 : 650)
+                 if Task.isCancelled { return }
+                 let mover = ses.pos.turn
+                 let mv = ses.playSetup(); self.animate(mv, self.promotedPiece(mv, mover))
+                 self.awaitPlayer()
+                }
     }
 
     private func awaitPlayer() {
-        say(mode == .daily ? "\(s.attemptsLeft): \(String(repeating: "❤️", count: max(0, attempts)))\(String(repeating: "🤍", count: max(0, Daily.ATTEMPTS - attempts)))" : s.findBest)
+        say(mode == .daily ? "\(s.attemptsLeft): \(String(repeating: "\u{2764}\u{fe0f}", count: max(0, attempts)))\(String(repeating: "\u{1f90d}", count: max(0, Daily.ATTEMPTS - attempts)))" : s.findBest)
         inputOn = true
     }
 
@@ -201,7 +204,6 @@ final class GameController: ObservableObject {
         if let m { submit(m) } else { selected = -1; targets = [] }
     }
 
-    /// Squares in `targets` that hold an enemy piece (drawn as rings instead of dots).
     func isCaptureTarget(_ sq: Int) -> Bool { (session?.pos.board[sq]).map { $0 != EMPTY } ?? false }
 
     private func submit(_ m: Move) {
@@ -211,35 +213,35 @@ final class GameController: ObservableObject {
         let verdict = ses.play(m)
         animate(m, promotedPiece(m, mover))
         switch verdict {
-        case .solved:
+            case .solved:
             if mode == .rush { rushSolvedOne() }
             else { launchP { [weak self] in await self?.sleep(450); self?.finish(true) } }
-        case .cont:
+            case .cont:
             say(s.correct, .ok); sound.correct()
             launchP { [weak self] in
-                guard let self else { return }
-                await self.sleep(self.mode == .rush ? 300 : 600)
-                if Task.isCancelled { return }
-                let rm = ses.pos.turn
-                let r = ses.playReply(); self.animate(r, self.promotedPiece(r, rm))
-                self.awaitPlayer()
-            }
-        case .wrong:
+                     guard let self else { return }
+                     await self.sleep(self.mode == .rush ? 300 : 600)
+                     if Task.isCancelled { return }
+                     let rm = ses.pos.turn
+                     let r = ses.playReply(); self.animate(r, self.promotedPiece(r, rm))
+                     self.awaitPlayer()
+                    }
+            case .wrong:
             sound.wrong(); say(s.wrong, .bad); shake += 1
             if mode == .rush { rushMistake(); return }
             if mode == .daily {
-                attempts -= 1; grid += "🟥"; persistDaily("progress")
+                attempts -= 1; grid += "\u{1f7e5}"; persistDaily("progress")
                 launchP { [weak self] in
-                    guard let self else { return }
-                    await self.sleep(900)
-                    if Task.isCancelled { return }
-                    if self.attempts <= 0 { self.finish(false) }
-                    else {
-                        ses.restart(); self.loadBoard(ses.pos)
-                        if let sm = ses.setupMove { self.lastFrom = sm.from; self.lastTo = sm.to }
-                        self.awaitPlayer()
-                    }
-                }
+                         guard let self else { return }
+                         await self.sleep(900)
+                         if Task.isCancelled { return }
+                         if self.attempts <= 0 { self.finish(false) }
+                         else {
+                             ses.restart(); self.loadBoard(ses.pos)
+                             if let sm = ses.setupMove { self.lastFrom = sm.from; self.lastTo = sm.to }
+                             self.awaitPlayer()
+                         }
+                        }
             } else {
                 launchP { [weak self] in await self?.sleep(900); self?.finish(false) }
             }
@@ -250,12 +252,11 @@ final class GameController: ObservableObject {
         guard let ses = session else { return }
         if !inputOn || !hintAvailable { return }
         RewardedAdManager.show { [weak self] in
-            guard let self else { return }
-            self.hintSq = sqIndex(String(ses.expectedUci().prefix(2))); self.hintUsed = true; self.hintAvailable = false; self.sound.click()
-        }
+                                guard let self else { return }
+                                self.hintSq = sqIndex(String(ses.expectedUci().prefix(2))); self.hintUsed = true; self.hintAvailable = false; self.sound.click()
+                               }
     }
 
-    /// After a failure: replay the full solution from the start position, then show the result.
     private func playSolution() async -> [String] {
         guard let ses = session else { return [] }
         let sol = ses.solutionMoves()
@@ -279,7 +280,7 @@ final class GameController: ObservableObject {
         if mode == .lesson { finishLesson(win); return }
         if win { say(s.solved, .ok); sound.solved() } else { say(s.failed, .bad); sound.failed() }
         if mode == .daily {
-            if win { grid += hintUsed ? "💡" : "🟩" }
+            if win { grid += hintUsed ? "\u{1f4a1}" : "\u{1f7e9}" }
             persistDaily(win ? "solved" : "failed")
             if !archive && dailyN == today() { store.recordDailyOutcome(dailyN, win: win) }
             if win && !archive, let mst = ReviewPrompt.shouldAsk(dailySolved: store.dailySolvedCount, alreadyAsked: store.reviewAsked) {
@@ -288,35 +289,34 @@ final class GameController: ObservableObject {
             }
             tick += 1; checkAchievements()
             launchP { [weak self] in
-                guard let self else { return }
-                let sans: [String]
-                if win { sans = ses.sanList } else { await self.sleep(400); sans = await self.playSolution() }
-                self.result = ResultUi(win: win, solution: sanLine(sans, player: ses.player), grid: self.grid,
-                                        solvedIn: win ? self.s.solvedIn(Daily.ATTEMPTS - self.attempts + 1, Daily.ATTEMPTS) : "",
-                                        showStreak: !self.archive)
-            }
+                     guard let self else { return }
+                     let sans: [String]
+                     if win { sans = ses.sanList } else { await self.sleep(400); sans = await self.playSolution() }
+                     self.result = ResultUi(win: win, solution: sanLine(sans, player: ses.player), grid: self.grid,
+                                            solvedIn: win ? self.s.solvedIn(Daily.ATTEMPTS - self.attempts + 1, Daily.ATTEMPTS) : "",
+                                            showStreak: !self.archive)
+                    }
         } else {
             let rankBefore = Ranks.index(store.rating)
             let delta = mode == .challenge ? 0 : Elo.delta(player: store.rating, puzzle: ses.rec.rating, games: store.ratingGames, win: win)
             if mode == .train { store.recordTraining(ses.rec.id, win: win, delta: delta) }
             tick += 1; checkAchievements()
             let rankAfter = Ranks.index(store.rating)
-            if mode == .train { title = "\(s.training) · \(Int(store.rating))" }
+            if mode == .train { title = "\(s.training) \u{00b7} \(Int(store.rating))" }
             launchP { [weak self] in
-                guard let self else { return }
-                let sans: [String]
-                if win { sans = ses.sanList } else { await self.sleep(400); sans = await self.playSolution() }
-                let themesLine = ses.rec.themeList.compactMap { themeName($0, self.lang) }.joined(separator: ", ")
-                self.result = ResultUi(win: win, solution: sanLine(sans, player: ses.player),
-                                        ratingLine: self.mode == .challenge ? "" : "\(self.s.rating): \(Int(self.store.rating)) (\(delta >= 0 ? "+" : "")\(delta))",
-                                        ratingUp: delta >= 0, puzzleRating: ses.rec.rating,
-                                        themes: themesLine.isEmpty ? "—" : themesLine,
-                                        rankUp: rankAfter > rankBefore ? "\(self.s.rankUp) \(self.s.ranks[rankAfter])" : "")
-            }
+                     guard let self else { return }
+                     let sans: [String]
+                     if win { sans = ses.sanList } else { await self.sleep(400); sans = await self.playSolution() }
+                     let themesLine = ses.rec.themeList.compactMap { themeName($0, self.lang) }.joined(separator: ", ")
+                     self.result = ResultUi(win: win, solution: sanLine(sans, player: ses.player),
+                                            ratingLine: self.mode == .challenge ? "" : "\(self.s.rating): \(Int(self.store.rating)) (\(delta >= 0 ? "+" : "")\(delta))",
+                                            ratingUp: delta >= 0, puzzleRating: ses.rec.rating,
+                                            themes: themesLine.isEmpty ? "\u{2014}" : themesLine,
+                                            rankUp: rankAfter > rankBefore ? "\(self.s.rankUp) \(self.s.ranks[rankAfter])" : "")
+                    }
         }
     }
 
-    // ---------------- daily ----------------
     private func persistDaily(_ status: String) { store.saveDay(dailyN, DayResult(status: status, grid: grid, attempts: attempts)) }
 
     func startDaily(_ n: Int, fromArchive: Bool = false) {
@@ -327,22 +327,21 @@ final class GameController: ObservableObject {
         let rec = Daily.puzzleFor(d, n)
         title = "\(s.daily) \(s.dailyNo)\(n)"
         if let prev, prev.status != "progress" {
-            // already finished: replay the solution and show the stored result
             grid = prev.grid; attempts = prev.attempts
             setup(rec, .daily)
             stopPuzzle()
             let ses = session!
             launchP { [weak self] in
-                guard let self else { return }
-                await self.sleep(650)
-                if Task.isCancelled { return }
-                let mover = ses.pos.turn
-                let mv = ses.playSetup(); self.animate(mv, self.promotedPiece(mv, mover)); self.hintAvailable = false
-                let win = prev.status == "solved"
-                if win { self.say(self.s.solved, .ok) } else { self.say(self.s.failed, .bad) }
-                let sans = await self.playSolution()
-                self.result = ResultUi(win: win, solution: sanLine(sans, player: ses.player), grid: self.grid, showStreak: !fromArchive)
-            }
+                     guard let self else { return }
+                     await self.sleep(650)
+                     if Task.isCancelled { return }
+                     let mover = ses.pos.turn
+                     let mv = ses.playSetup(); self.animate(mv, self.promotedPiece(mv, mover)); self.hintAvailable = false
+                     let win = prev.status == "solved"
+                     if win { self.say(self.s.solved, .ok) } else { self.say(self.s.failed, .bad) }
+                     let sans = await self.playSolution()
+                     self.result = ResultUi(win: win, solution: sanLine(sans, player: ses.player), grid: self.grid, showStreak: !fromArchive)
+                    }
             return
         }
         grid = prev?.grid ?? ""; attempts = prev?.attempts ?? Daily.ATTEMPTS
@@ -360,26 +359,24 @@ final class GameController: ObservableObject {
         sound.click()
         if mode == .daily {
             sharePayload = SharePayload(fen: ses.startFen, flip: ses.player == "b", headline: "\(s.daily) \(s.dailyNo)\(dailyN)",
-                                         goal: goal, grid: grid, text: s.shareText(dailyN, grid, store.displayStreak(today()), link))
+                                        goal: goal, grid: grid, text: s.shareText(dailyN, grid, store.displayStreak(today()), link))
         } else {
             sharePayload = SharePayload(fen: ses.startFen, flip: ses.player == "b", headline: s.challengeText(goal),
-                                         goal: goal, grid: "", text: s.challengeText(goal) + "\n" + link)
+                                        goal: goal, grid: "", text: s.challengeText(goal) + "\n" + link)
         }
     }
 
-    /// Opened from a friend's challenge link: unrated, then normal training.
     func startChallenge(_ id: String) {
         guard let d = db, let rec = Challenge.find(d, id) else { return }
         title = s.challengeTitle
         setup(rec, .challenge)
     }
 
-    // ---------------- training ----------------
     func startTraining() {
         guard let d = db else { return }
         sound.click()
         let rec = Training.pick(d, rating: store.rating, theme: store.theme, seen: Set(store.seen))
-        title = "\(s.training) · \(Int(store.rating))"
+        title = "\(s.training) \u{00b7} \(Int(store.rating))"
         setup(rec, .train)
     }
     func setTheme(_ key: String) { store.setTheme(key); startTraining() }
@@ -389,9 +386,7 @@ final class GameController: ObservableObject {
         else { startTraining() }
     }
 
-    // ---------------- achievements ----------------
     @Published private(set) var achToast: String? = nil
-    /// Checks for newly earned achievements and shows a short banner.
     private func checkAchievements() {
         let st = store.stats()
         let fresh = ACHIEVEMENTS.filter { isEarned($0, st) && !store.achSeen.contains($0.id) }
@@ -403,17 +398,16 @@ final class GameController: ObservableObject {
     }
     func achTitle(_ a: Achievement) -> String {
         switch a.kind {
-        case .firstDaily: return s.achFirst
-        case .streak: return s.achStreak(a.n)
-        case .train: return s.achTrain(a.n)
-        case .rating: return s.achRating(a.n)
-        case .rush: return s.achRush(a.n)
-        case .lessons: return s.achLessons
-        case .mate3: return s.achMate3
+            case .firstDaily: return s.achFirst
+            case .streak: return s.achStreak(a.n)
+            case .train: return s.achTrain(a.n)
+            case .rating: return s.achRating(a.n)
+            case .rush: return s.achRush(a.n)
+            case .lessons: return s.achLessons
+            case .mate3: return s.achMate3
         }
     }
 
-    // ---------------- board themes ----------------
     @Published private(set) var boardTheme: BoardTheme
     @discardableResult
     func pickBoardTheme(_ t: BoardTheme) -> Bool {
@@ -421,7 +415,6 @@ final class GameController: ObservableObject {
         store.setBoardTheme(t); boardTheme = t; sound.click(); return true
     }
 
-    // ---------------- puzzle rush ----------------
     @Published private(set) var rushSeconds = Rush.SECONDS
     @Published private(set) var rushSolved = 0
     @Published private(set) var rushMistakes = 0
@@ -436,13 +429,13 @@ final class GameController: ObservableObject {
         title = s.rush
         nextRush(d)
         rushTask = Task { [weak self] in
-            while let self, self.rushSeconds > 0 {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-                if Task.isCancelled { return }
-                self.rushSeconds -= 1
-            }
-            self?.endRush()
-        }
+                         while let self, self.rushSeconds > 0 {
+                             try? await Task.sleep(nanoseconds: 1_000_000_000)
+                             if Task.isCancelled { return }
+                             self.rushSeconds -= 1
+                         }
+                         self?.endRush()
+                        }
     }
     private func stopRush() { rushTask?.cancel(); rushTask = nil }
     private func nextRush(_ d: PuzzleDb) {
@@ -476,11 +469,10 @@ final class GameController: ObservableObject {
     func shareRush() {
         guard let ses = session else { return }
         sound.click()
-        sharePayload = SharePayload(fen: ses.startFen, flip: ses.player == "b", headline: "⚡ \(s.rush): \(rushSolved)",
-                                     goal: s.rushDesc, grid: "", text: s.shareRush(rushSolved) + "\n" + STORE_URL)
+        sharePayload = SharePayload(fen: ses.startFen, flip: ses.player == "b", headline: "\u{26a1} \(s.rush): \(rushSolved)",
+                                    goal: s.rushDesc, grid: "", text: s.shareRush(rushSolved) + "\n" + STORE_URL)
     }
 
-    // ---------------- lessons ----------------
     @Published private(set) var lessonKey = ""
     @Published private(set) var lessonIdx = 0
     func lessonPuzzles(_ key: String) -> [PuzzleRec] { db.map { Lessons.puzzles($0, key) } ?? [] }
@@ -490,7 +482,7 @@ final class GameController: ObservableObject {
         let solved = store.lessonSolved[key] ?? []
         let i = idx >= 0 ? idx : ((0..<list.count).first { !solved.contains($0) } ?? 0)
         lessonKey = key; lessonIdx = i
-        title = "\(themeName(key, lang) ?? key) · \(s.lessonOf(i + 1, list.count))"
+        title = "\(themeName(key, lang) ?? key) \u{00b7} \(s.lessonOf(i + 1, list.count))"
         setup(list[i], .lesson)
     }
     private func finishLesson(_ win: Bool) {
@@ -499,11 +491,11 @@ final class GameController: ObservableObject {
         let done = (store.lessonSolved[lessonKey]?.count ?? 0) >= Lessons.PER_LESSON
         tick += 1; checkAchievements()
         launchP { [weak self] in
-            guard let self else { return }
-            let sans: [String]
-            if win { sans = ses.sanList } else { await self.sleep(400); sans = await self.playSolution() }
-            self.result = ResultUi(win: win, solution: sanLine(sans, player: ses.player), lessonDone: done)
-        }
+                 guard let self else { return }
+                 let sans: [String]
+                 if win { sans = ses.sanList } else { await self.sleep(400); sans = await self.playSolution() }
+                 self.result = ResultUi(win: win, solution: sanLine(sans, player: ses.player), lessonDone: done)
+                }
     }
     func nextLessonPuzzle() {
         let list = lessonPuzzles(lessonKey)
