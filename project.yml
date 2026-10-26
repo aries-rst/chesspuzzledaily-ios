@@ -38,6 +38,14 @@ targets:
         # AdMob App ID — real ad serving stays off until `adsEnabled` in Ads.swift is flipped to
         # true for the production release (see the comment there).
         GADApplicationIdentifier: "ca-app-pub-9638598348702189~1410340420"
+        # Nearby multiplayer (premium feature, NetPlay.swift) — MultipeerConnectivity needs both
+        # of these usage strings plus the Bonjour service declaration to discover/host over
+        # Bluetooth and local Wi-Fi.
+        NSLocalNetworkUsageDescription: "Используется для игры по сети с другим игроком рядом (Bluetooth / Wi-Fi)."
+        NSBluetoothAlwaysUsageDescription: "Используется для поиска игроков рядом через Bluetooth."
+        NSBonjourServices:
+          - _cpd-chess._tcp
+          - _cpd-chess._udp
         # NSUserTrackingUsageDescription intentionally NOT included while adsEnabled is false:
         # Apple blocks App Store submission ("Добавить для проверки") if the binary contains this
         # key, since it implies the app may show the ATT tracking-permission prompt. Add this key
