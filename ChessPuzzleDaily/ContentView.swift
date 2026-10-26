@@ -17,24 +17,22 @@ struct ContentView: View {
 
     var body: some View {
         RootView(c: controller)
-            .preferredColorScheme(.dark)
-            .task {
-                // Re-arms the daily reminder on every launch too: iOS can drop a pending
-                // notification request (reinstall, OS cleanup) without telling the app.
-                Reminder.apply(store: store)
-                AdsInit.start() // no-op while `adsEnabled` is false (see Ads.swift)
-                guard controller.db == nil, let url = Bundle.main.url(forResource: "puzzles", withExtension: "json") else { return }
-                do {
-                    let data = try Data(contentsOf: url)
-                    let db = try await Task.detached(priority: .userInitiated) { try PuzzleDb.parse(data) }.value
-                    controller.db = db
-                } catch {
-                    // Falls back to an empty puzzle list; Home/Splash guard against a nil db already.
-                    #if DEBUG
-                    print("puzzles.json failed to parse: \(error)")
-                    #endif
-                }
+        .preferredColorScheme(.dark)
+        .task {
+            Reminder.apply(store: store)
+            AdsInit.start() // no-op while `adsEnabled` is false (see Ads.swift)
+            PremiumStore.shared.start() // loads the "premium" product + current entitlement
+            guard controller.db == nil, let url = Bundle.main.url(forResource: "puzzles", withExtension: "json") else { return }
+            do {
+                let data = try Data(contentsOf: url)
+                let db = try await Task.detached(priority: .userInitiated) { try PuzzleDb.parse(data) }.value
+                controller.db = db
+            } catch {
+                #if DEBUG
+                print("puzzles.json failed to parse: \(error)")
+                #endif
             }
+        }
     }
 }
 
