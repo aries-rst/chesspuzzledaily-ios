@@ -16,6 +16,7 @@ let adsEnabled = false
 
 /// True once the player owns "premium" (see Premium.swift) — ads stay off for them even once
 /// `adsEnabled` above is flipped to true for everyone else.
+@MainActor
 private var premiumActive: Bool { PremiumStore.shared.isPremium }
 
 /// Real AdMob identifiers (from the user's AdMob console — these are public identifiers meant to
@@ -27,6 +28,7 @@ enum AdUnitIds {
         static let rewarded = "ca-app-pub-9638598348702189/5167506621"
 }
 
+@MainActor
 enum AdsInit {
         private(set) static var ready = false
 
@@ -35,9 +37,11 @@ enum AdsInit {
         static func start() {
                     guard adsEnabled, !premiumActive, !ready else { return }
                     MobileAds.shared.start { _ in
-                                                        ready = true
-                                                        InterstitialAdManager.preload()
-                                                        RewardedAdManager.preload()
+                                                        Task { @MainActor in
+                                                                              ready = true
+                                                                              InterstitialAdManager.preload()
+                                                                              RewardedAdManager.preload()
+                                                             }
                                            }
         }
 }
@@ -56,6 +60,7 @@ private func topViewController() -> UIViewController? {
 
 // MARK: - Interstitial
 
+@MainActor
 enum InterstitialAdManager {
         private static var ad: InterstitialAd?
         private static var loading = false
@@ -101,6 +106,7 @@ private final class InterstitialDelegate: NSObject, FullScreenContentDelegate {
 
 // MARK: - Rewarded
 
+@MainActor
 enum RewardedAdManager {
         private static var ad: RewardedAd?
         private static var loading = false
