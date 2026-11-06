@@ -190,6 +190,15 @@ final class LocalGameManager: ObservableObject, BoardDisplaying {
     private func finish() {
         thinking = false
         discardSaved()
+        if case .bot(let level) = mode, let e = end {
+            let result: Int
+            switch e {
+            case .checkmate(let w): result = w == humanColor ? 1 : -1
+            case .resigned(let l): result = l == humanColor ? -1 : 1
+            default: result = 0
+            }
+            BotStats.record(level: level, result: result)
+        }
         if case .checkmate(let w) = end {
             if !isBotGame || w == humanColor { sound?.solved() } else { sound?.failed() }
         }
@@ -264,6 +273,22 @@ final class LocalGameManager: ObservableObject, BoardDisplaying {
     }
 
     func stopThinking() { gameId += 1; thinking = false }
+}
+
+/// Results vs. the bot per level: [wins, draws, losses].
+enum BotStats {
+    private static let key = "cpd_bot_stats"
+    static func get(_ level: Int) -> [Int] {
+        let d = UserDefaults.standard.dictionary(forKey: key) as? [String: [Int]] ?? [:]
+        return d[String(level)] ?? [0, 0, 0]
+    }
+    static func record(level: Int, result: Int) {
+        var d = UserDefaults.standard.dictionary(forKey: key) as? [String: [Int]] ?? [:]
+        var r = d[String(level)] ?? [0, 0, 0]
+        r[result > 0 ? 0 : (result == 0 ? 1 : 2)] += 1
+        d[String(level)] = r
+        UserDefaults.standard.set(d, forKey: key)
+    }
 }
 
 let NET_START_FEN_PUBLIC = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
@@ -344,6 +369,10 @@ struct PlaySetupScreen: View {
                         ForEach(1...5, id: \.self) { l in Chip(text: "\(l)", on: level == l) { level = l } }
                     }
                     Text(levelName(level, L)).foregroundColor(TEXT).font(.system(size: 14))
+                    let r = BotStats.get(level)
+                    Text(t("Ваш счёт против этого уровня: \(r[0]) побед · \(r[1]) ничьих · \(r[2]) поражений",
+                           "Your score vs. this level: \(r[0]) wins · \(r[1]) draws · \(r[2]) losses"))
+                        .foregroundColor(MUTED).font(.system(size: 12))
                     Text(t("Ваш цвет", "Your colour")).foregroundColor(MUTED).font(.system(size: 13, weight: .semibold))
                     HStack(spacing: 8) {
                         Chip(text: t("Белые", "White"), on: color == "w") { color = "w" }
