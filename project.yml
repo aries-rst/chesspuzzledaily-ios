@@ -46,11 +46,7 @@ targets:
         NSBonjourServices:
           - _cpd-chess._tcp
           - _cpd-chess._udp
-        # NSUserTrackingUsageDescription intentionally NOT included while adsEnabled is false:
-        # Apple blocks App Store submission ("Добавить для проверки") if the binary contains this
-        # key, since it implies the app may show the ATT tracking-permission prompt. Add this key
-        # back (and update the App Privacy "Данные для отслеживания" declaration in App Store
-        # Connect in the same pass) exactly when adsEnabled is flipped to true and ATT is wired up.
+        NSUserTrackingUsageDescription: "This identifier is used to show you more relevant ads. / Этот идентификатор используется для показа более релевантной рекламы."
         SKAdNetworkItems:
           - SKAdNetworkIdentifier: cstr6suwn9.skadnetwork
           - SKAdNetworkIdentifier: 4fzdc2evr5.skadnetwork
