@@ -164,10 +164,15 @@ private let PARSED: [Character: (paths: [Path], cut: Path?)] = SHAPES.mapValues 
     (s.paths.map { SVGPath.parse($0) }, s.cut.map { SVGPath.parse($0) })
 }
 
+// legacy classic colour (now PieceSet.classic)
 private let WHITE_FILL = Color(red: 0xFB / 255.0, green: 0xF6 / 255.0, blue: 0xEA / 255.0)
+// legacy classic colour (now PieceSet.classic)
 private let WHITE_LINE = Color(red: 0x3A / 255.0, green: 0x31 / 255.0, blue: 0x28 / 255.0)
+// legacy classic colour (now PieceSet.classic)
 private let BLACK_FILL = Color(red: 0x2B / 255.0, green: 0x26 / 255.0, blue: 0x22 / 255.0)
+// legacy classic colour (now PieceSet.classic)
 private let BLACK_LINE = Color(red: 0x0E / 255.0, green: 0x0C / 255.0, blue: 0x0A / 255.0)
+// legacy classic colour (now PieceSet.classic)
 private let BLACK_DETAIL = Color(red: 0xE9 / 255.0, green: 0xDC / 255.0, blue: 0xC0 / 255.0)
 
 extension GraphicsContext {
@@ -177,11 +182,13 @@ extension GraphicsContext {
         let t = Character(piece.uppercased())
         guard let shape = SHAPES[t], let parsed = PARSED[t] else { return }
         let white = piece.isUppercase
-        let fill = white ? WHITE_FILL : BLACK_FILL
-        let line = white ? WHITE_LINE : BLACK_LINE
-        let detail = white ? WHITE_LINE : BLACK_DETAIL
+        let pal = PieceSet.current.palette
+        let outline = pal.outline
+        let fill = outline ? Color.black.opacity(0.35) : (white ? pal.wFill : pal.bFill)
+        let line = white ? pal.wLine : pal.bLine
+        let detail = outline ? line : (white ? pal.wLine : pal.bDetail)
         let k = side / 100
-        let stroke = StrokeStyle(lineWidth: 3, lineJoin: .round)
+        let stroke = StrokeStyle(lineWidth: outline ? 4 : 3, lineJoin: .round)
 
         var ctx = self
         ctx.scaleBy(x: k, y: k)

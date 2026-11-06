@@ -588,9 +588,9 @@ struct SettingsScreen: View {
             }
             Text(s.boardTheme).foregroundColor(MUTED).font(.system(size: 13)).padding(.top, 4).padding(.bottom, 6)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            HStack(spacing: 8) {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 5), spacing: 10) {
                 ForEach(BoardTheme.allCases, id: \.self) { t in
-                    let open = t.isUnlocked(stats)
+                    let open = t.isUnlocked(stats, premium: c.premium.isPremium)
                     VStack {
                         ZStack {
                             Canvas { context, size in
@@ -600,16 +600,41 @@ struct SettingsScreen: View {
                                                  with: .color((i + j) % 2 == 0 ? Color(rgb: t.light & 0xFFFFFF) : Color(rgb: t.dark & 0xFFFFFF)))
                                 } }
                             }
-                            if !open { Text("🔒").font(.system(size: 18)) }
+                            if !open { Text(t.premiumOnly ? "👑" : "🔒").font(.system(size: 18)) }
                         }
                         .frame(width: 52, height: 52).clipShape(RoundedRectangle(cornerRadius: 10))
                         .overlay(RoundedRectangle(cornerRadius: 10).stroke(c.boardTheme == t ? GOLD : LINE, lineWidth: c.boardTheme == t ? 3 : 1))
-                        Text(s.boardThemes[BoardTheme.allCases.firstIndex(of: t) ?? 0]).foregroundColor(TEXT).font(.system(size: 11)).lineLimit(1).padding(.top, 4)
+                        Text(t.name(s, c.lang)).foregroundColor(TEXT).font(.system(size: 11)).lineLimit(1).padding(.top, 4)
                     }
                     .frame(maxWidth: .infinity)
                     .onTapGesture {
                         if c.pickBoardTheme(t) { hint = "" }
+                        else if t.premiumOnly { hint = c.lang == .ru ? "👑 Доступно в Premium" : "👑 Available with Premium" }
                         else { hint = t.unlockStreak > 0 ? s.unlockStreak(t.unlockStreak) : s.unlockTrain(t.unlockTrain) }
+                    }
+                }
+            }.padding(.bottom, 6)
+            Text(c.lang == .ru ? "Фигуры" : "Pieces").foregroundColor(MUTED).font(.system(size: 13)).padding(.top, 8).padding(.bottom, 6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 10) {
+                ForEach(PieceSet.allCases, id: \.self) { ps in
+                    let open = !ps.premiumOnly || c.premium.isPremium
+                    VStack(spacing: 4) {
+                        ZStack {
+                            HStack(spacing: 0) {
+                                PieceSetPreview(set: ps, piece: "N")
+                                PieceSetPreview(set: ps, piece: "q")
+                            }
+                            .padding(4)
+                            .background(Color(rgb: c.boardTheme.dark & 0xFFFFFF).opacity(0.55))
+                            if !open { Text("👑").font(.system(size: 16)).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing).padding(2) }
+                        }
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(c.pieceSet == ps ? GOLD : LINE, lineWidth: c.pieceSet == ps ? 3 : 1))
+                        Text(ps.name(c.lang)).foregroundColor(TEXT).font(.system(size: 11)).lineLimit(1)
+                    }
+                    .onTapGesture {
+                        if c.pickPieceSet(ps) { hint = "" } else { hint = c.lang == .ru ? "👑 Доступно в Premium" : "👑 Available with Premium" }
                     }
                 }
             }.padding(.bottom, 6)
@@ -780,5 +805,21 @@ struct AchievementsScreen: View {
                 }.padding(.bottom, 10)
             }
         }
+    }
+}
+
+
+/// Small preview of one piece drawn with a given set (independent of the active set).
+struct PieceSetPreview: View {
+    let set: PieceSet
+    let piece: Character
+    var body: some View {
+        Canvas { context, size in
+            let saved = PieceSet.current
+            PieceSet.current = set
+            context.drawPiece(piece, side: size.width)
+            PieceSet.current = saved
+        }
+        .frame(width: 40, height: 40)
     }
 }

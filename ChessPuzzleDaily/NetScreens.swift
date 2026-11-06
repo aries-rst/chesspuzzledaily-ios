@@ -19,6 +19,7 @@ struct PremiumScreen: View {
                     Text(t("🚫 Без рекламы", "🚫 No ads")).foregroundColor(TEXT)
                     Text(t("💡 Подсказки, архив и заморозка серии без видео", "💡 Hints, archive and streak freeze without videos")).foregroundColor(TEXT)
                     Text(t("🤖 Игра с ботом — 5 уровней", "🤖 Play the bot — 5 levels")).foregroundColor(TEXT)
+                    Text(t("🎨 Все 14 досок и 6 наборов фигур", "🎨 All 14 boards and 6 piece sets")).foregroundColor(TEXT)
                     Text(t("📡 Создание игры рядом по Bluetooth / Wi-Fi (присоединиться можно бесплатно)",
                            "📡 Host nearby games over Bluetooth / Wi-Fi (joining is free)")).foregroundColor(TEXT)
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 6)

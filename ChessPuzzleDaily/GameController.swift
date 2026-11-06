@@ -80,6 +80,12 @@ final class GameController: ObservableObject {
         self.muted = store.muted
         self.boardTheme = store.boardTheme
         localGame.sound = sound
+        PieceSet.current = pieceSet
+        // Lost Premium (e.g. refunded): fall back to free cosmetics.
+        if !premium.isPremium {
+            if boardTheme.premiumOnly { boardTheme = .walnut; store.setBoardTheme(.walnut) }
+            if pieceSet.premiumOnly { pieceSet = .classic; PieceSet.current = .classic }
+        }
     }
 
     func today() -> Int {
@@ -442,8 +448,18 @@ final class GameController: ObservableObject {
     @Published private(set) var boardTheme: BoardTheme
     @discardableResult
     func pickBoardTheme(_ t: BoardTheme) -> Bool {
-        if !t.isUnlocked(store.stats()) { return false }
+        if !t.isUnlocked(store.stats(), premium: premium.isPremium) { return false }
         store.setBoardTheme(t); boardTheme = t; sound.click(); return true
+    }
+
+    @Published private(set) var pieceSet: PieceSet = PieceSet(rawValue: UserDefaults.standard.string(forKey: "cpd_piece_set") ?? "") ?? .classic
+
+    /// Returns false when the set needs Premium.
+    func pickPieceSet(_ p: PieceSet) -> Bool {
+        if p.premiumOnly && !premium.isPremium { return false }
+        UserDefaults.standard.set(p.rawValue, forKey: "cpd_piece_set")
+        PieceSet.current = p; pieceSet = p; sound.click(); tick += 1
+        return true
     }
 
     @Published private(set) var rushSeconds = Rush.SECONDS

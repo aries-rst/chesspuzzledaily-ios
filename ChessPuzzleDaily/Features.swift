@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 // Port of Features.kt — pure logic for growth features (no UIKit/SwiftUI imports).
 
@@ -61,9 +62,11 @@ func isEarned(_ a: Achievement, _ s: PlayerStats) -> Bool {
     }
 }
 
-/// Board colour themes; extra themes unlock as rewards (cosmetic only).
+/// Board colour themes (cosmetic only). The first five unlock as rewards (Premium opens them at
+/// once); the rest are Premium-only.
 enum BoardTheme: String, CaseIterable {
     case walnut, tournament, ocean, marble, amethyst
+    case samarkand, emerald, ebony, rose, sand, ice, coffee, night, cherry
 
     var light: UInt32 {
         switch self {
@@ -72,6 +75,15 @@ enum BoardTheme: String, CaseIterable {
         case .ocean: return 0xFFDEE3E6
         case .marble: return 0xFFE8E4DC
         case .amethyst: return 0xFFE9DFF0
+        case .samarkand: return 0xFFF2E6C9
+        case .emerald: return 0xFFE4EFDF
+        case .ebony: return 0xFFD9CBB0
+        case .rose: return 0xFFF6E3E1
+        case .sand: return 0xFFF3E7C6
+        case .ice: return 0xFFEAF4FA
+        case .coffee: return 0xFFE7D6C1
+        case .night: return 0xFF9AA6B8
+        case .cherry: return 0xFFF0D9C4
         }
     }
     var dark: UInt32 {
@@ -81,8 +93,18 @@ enum BoardTheme: String, CaseIterable {
         case .ocean: return 0xFF8CA2AD
         case .marble: return 0xFF9A958C
         case .amethyst: return 0xFF8E6FA8
+        case .samarkand: return 0xFF1F6F8B
+        case .emerald: return 0xFF2E7D5B
+        case .ebony: return 0xFF3B2E25
+        case .rose: return 0xFFC07A7A
+        case .sand: return 0xFFC79A5B
+        case .ice: return 0xFF7FA7C4
+        case .coffee: return 0xFF6F4E37
+        case .night: return 0xFF34405A
+        case .cherry: return 0xFF8E3B2F
         }
     }
+    var premiumOnly: Bool { BoardTheme.allCases.firstIndex(of: self)! >= 5 }
     var unlockStreak: Int {
         switch self {
         case .tournament: return 3
@@ -93,7 +115,51 @@ enum BoardTheme: String, CaseIterable {
     }
     var unlockTrain: Int { self == .marble ? 50 : 0 }
 
-    func isUnlocked(_ s: PlayerStats) -> Bool { s.bestStreak >= unlockStreak && s.trainSolved >= unlockTrain }
+    func isUnlocked(_ s: PlayerStats, premium: Bool) -> Bool {
+        if premium { return true }
+        if premiumOnly { return false }
+        return s.bestStreak >= unlockStreak && s.trainSolved >= unlockTrain
+    }
+
+    /// Display name; the first five come from the localized Strings table.
+    func name(_ s: Strings, _ lang: Lang) -> String {
+        if let i = BoardTheme.allCases.firstIndex(of: self), i < 5, i < s.boardThemes.count { return s.boardThemes[i] }
+        let ru: [BoardTheme: String] = [.samarkand: "Самарканд", .emerald: "Изумруд", .ebony: "Эбен", .rose: "Роза", .sand: "Пустыня",
+                                         .ice: "Лёд", .coffee: "Кофе", .night: "Ночь", .cherry: "Вишня"]
+        let en: [BoardTheme: String] = [.samarkand: "Samarkand", .emerald: "Emerald", .ebony: "Ebony", .rose: "Rose", .sand: "Desert",
+                                         .ice: "Ice", .coffee: "Coffee", .night: "Night", .cherry: "Cherry"]
+        return (lang == .ru ? ru[self] : en[self]) ?? rawValue
+    }
+}
+
+/// Piece colour sets (cosmetic only). Classic is free, the rest are Premium.
+enum PieceSet: String, CaseIterable {
+    case classic, goldSilver, wood, marble, ruby, neon
+
+    /// Set from GameController at launch and whenever the player picks a set.
+    static var current: PieceSet = .classic
+
+    var premiumOnly: Bool { self != .classic }
+
+    struct Palette { let wFill: Color; let wLine: Color; let bFill: Color; let bLine: Color; let bDetail: Color; let outline: Bool }
+
+    var palette: Palette {
+        func c(_ v: UInt32) -> Color { Color(red: Double((v >> 16) & 0xFF) / 255, green: Double((v >> 8) & 0xFF) / 255, blue: Double(v & 0xFF) / 255) }
+        switch self {
+        case .classic: return Palette(wFill: c(0xFBF6EA), wLine: c(0x3A3128), bFill: c(0x2B2622), bLine: c(0x0E0C0A), bDetail: c(0xE9DCC0), outline: false)
+        case .goldSilver: return Palette(wFill: c(0xF3D27A), wLine: c(0x7A5A12), bFill: c(0xB9C2CC), bLine: c(0x3E4650), bDetail: c(0x3E4650), outline: false)
+        case .wood: return Palette(wFill: c(0xE9C99A), wLine: c(0x6B4A26), bFill: c(0x6E4424), bLine: c(0x2E1B0C), bDetail: c(0xE9C99A), outline: false)
+        case .marble: return Palette(wFill: c(0xF4F2EE), wLine: c(0x8C8A86), bFill: c(0x8E2E2A), bLine: c(0x3D0F0D), bDetail: c(0xF4D9C9), outline: false)
+        case .ruby: return Palette(wFill: c(0xFFF4E0), wLine: c(0xB0412F), bFill: c(0x1F3B5C), bLine: c(0x0A1626), bDetail: c(0xFFD27A), outline: false)
+        case .neon: return Palette(wFill: c(0x00E5FF), wLine: c(0x00E5FF), bFill: c(0xFF3DA8), bLine: c(0xFF3DA8), bDetail: c(0xFFFFFF), outline: true)
+        }
+    }
+
+    func name(_ lang: Lang) -> String {
+        let ru: [PieceSet: String] = [.classic: "Классика", .goldSilver: "Золото и серебро", .wood: "Дерево", .marble: "Мрамор", .ruby: "Рубин и сапфир", .neon: "Неон"]
+        let en: [PieceSet: String] = [.classic: "Classic", .goldSilver: "Gold & Silver", .wood: "Wood", .marble: "Marble", .ruby: "Ruby & Sapphire", .neon: "Neon"]
+        return (lang == .ru ? ru[self] : en[self]) ?? rawValue
+    }
 }
 
 /// Streak freeze: offered when exactly yesterday was missed, at most once per 7 days.
