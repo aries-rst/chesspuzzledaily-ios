@@ -4,13 +4,13 @@ import MultipeerConnectivity
 
 // iOS equivalent of NetPlay.kt — Bluetooth/Wi-Fi local multiplayer via Apple's
 // MultipeerConnectivity framework (the iOS counterpart of Android's Nearby Connections API).
-// Gated behind Premium: the UI only reaches here once `PremiumStore.shared.isPremium` is true
-// (see NetScreens.swift / GameController.openNetPlay()).
+// Hosting needs Premium (GameController.hostNetGame); finding and joining a game is free.
 //
-// Protocol: the host is always White, the peer who joins is always Black — no in-band
-// negotiation needed. Once the MultipeerConnectivity session connects, the host sends a
-// `.start` message with the opening FEN; from then on each side sends the single `.move` it
-// just applied, in UCI form, and the other side replays that exact move locally.
+// Protocol: the guest picks a host from the list of nearby games. Once connected, the host sends
+// `.start` with the opening FEN and its own colour (White first, colours swap on every rematch);
+// from then on each side sends the single `.move` it just applied, in UCI form, and the other side
+// replays it locally. Both phones apply the same draw rules (stalemate, threefold repetition,
+// 50 moves, insufficient material); draw offers and rematches are explicit messages.
 
 /// Shared contract so `ChessBoardView` (BoardView.swift) can render either a puzzle session
 /// (`GameController`) or a live nearby game (`NetPlayManager`) without duplicating the Canvas
@@ -33,31 +33,41 @@ protocol BoardDisplaying: AnyObject {
 
 extension GameController: BoardDisplaying {}
 
-private enum NetMsgType: String, Codable { case start, move, resign }
+private enum NetMsgType: String, Codable { case start, move, resign, drawOffer, drawAccept, drawDecline, rematch }
 private struct NetMessage: Codable {
       var type: NetMsgType
       var fen: String = ""
       var uci: String = ""
+      var hostColor: String = "w"
 }
 
-enum NetConnState { case idle, hosting, browsing, connected, lost }
-enum NetOutcome: Equatable { case checkmateWin, checkmateLoss, stalemate, resignedByMe, resignedByOpponent, disconnected }
+enum NetConnState { case idle, hosting, browsing, connecting, connected, lost }
+enum NetOutcome: Equatable {
+      case checkmateWin, checkmateLoss, stalemate, resignedByMe, resignedByOpponent, disconnected
+      case drawRepetition, drawFifty, drawInsufficient, drawAgreed
+}
 
 private let NET_SERVICE = "cpd-chess"
 private let NET_START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+private let NAME_KEY = "cpd_player_name"
+
+struct NearbyHost: Identifiable, Equatable {
+      let peer: MCPeerID
+      var id: String { peer.displayName + "#\(peer.hash)" }
+      var name: String { peer.displayName }
+}
 
 @MainActor
 final class NetPlayManager: NSObject, ObservableObject, BoardDisplaying {
-      private let myPeerId = MCPeerID(displayName: UIDevice.current.name)
-      private lazy var session: MCSession = {
-                let s = MCSession(peer: myPeerId, securityIdentity: nil, encryptionPreference: .required)
-                s.delegate = self
-                return s
-      }()
+      private var myPeerId = MCPeerID(displayName: "Player")
+      private var session: MCSession?
       private var advertiser: MCNearbyServiceAdvertiser?
       private var browser: MCNearbyServiceBrowser?
       private let model = BoardModel()
       private var position = Position.fromFen(NET_START_FEN)
+      private var keys: [String] = []
+      private var connectedPeer: MCPeerID?
+      var sound: SoundManager?
 
       @Published private(set) var state: NetConnState = .idle
       @Published private(set) var peerName = ""
@@ -66,7 +76,16 @@ final class NetPlayManager: NSObject, ObservableObject, BoardDisplaying {
       @Published private(set) var started = false
       @Published private(set) var sanList: [String] = []
       @Published private(set) var outcome: NetOutcome? = nil
+      @Published private(set) var hosts: [NearbyHost] = []
+      @Published private(set) var drawOfferIncoming = false
+      @Published private(set) var drawOfferSent = false
+      @Published private(set) var drawDeclined = false
+      @Published private(set) var rematchIncoming = false
+      @Published private(set) var rematchSent = false
       @Published var promotionChoices: [Move]? = nil
+      @Published var playerName: String = UserDefaults.standard.string(forKey: NAME_KEY) ?? "" {
+                didSet { UserDefaults.standard.set(playerName, forKey: NAME_KEY) }
+      }
 
       // BoardDisplaying
       @Published private(set) var pieces: [BoardPiece] = []
@@ -81,11 +100,35 @@ final class NetPlayManager: NSObject, ObservableObject, BoardDisplaying {
       @Published var boardTheme: BoardTheme = .walnut
 
       func isCaptureTarget(_ sq: Int) -> Bool { position.board[sq] != EMPTY }
+      var turn: Character { position.turn }
+
+      /// Shown to the other player. iOS 16+ only reports a generic device name, so the player
+      /// can type their own (saved between launches).
+      private var displayName: String {
+                var n = playerName.trimmingCharacters(in: .whitespacesAndNewlines)
+                if n.isEmpty { n = UIDevice.current.name }
+                // MCPeerID display names must stay within 63 UTF-8 bytes.
+                while n.utf8.count > 60 { n.removeLast() }
+                return n.isEmpty ? "Player" : n
+      }
+
+      private func newSession() -> MCSession {
+                session?.delegate = nil
+                session?.disconnect()
+                myPeerId = MCPeerID(displayName: displayName)
+                let s = MCSession(peer: myPeerId, securityIdentity: nil, encryptionPreference: .required)
+                s.delegate = self
+                session = s
+                connectedPeer = nil
+                return s
+      }
 
       // ---------------- hosting / joining ----------------
 
       func hostGame() {
+                stopRadios()
                 resetGame()
+                _ = newSession()
                 isHost = true
                 state = .hosting
                 let a = MCNearbyServiceAdvertiser(peer: myPeerId, discoveryInfo: nil, serviceType: NET_SERVICE)
@@ -94,9 +137,13 @@ final class NetPlayManager: NSObject, ObservableObject, BoardDisplaying {
                 advertiser = a
       }
 
+      /// Starts looking for hosts nearby; the player then picks one from `hosts`.
       func joinGame() {
+                stopRadios()
                 resetGame()
+                _ = newSession()
                 isHost = false
+                hosts = []
                 state = .browsing
                 let b = MCNearbyServiceBrowser(peer: myPeerId, serviceType: NET_SERVICE)
                 b.delegate = self
@@ -104,25 +151,76 @@ final class NetPlayManager: NSObject, ObservableObject, BoardDisplaying {
                 browser = b
       }
 
-      func stop() {
+      func connect(to host: NearbyHost) {
+                guard state == .browsing, let session, let browser else { return }
+                state = .connecting
+                peerName = host.name
+                browser.invitePeer(host.peer, to: session, withContext: nil, timeout: 20)
+      }
+
+      private func stopRadios() {
                 advertiser?.stopAdvertisingPeer(); advertiser = nil
                 browser?.stopBrowsingForPeers(); browser = nil
-                session.disconnect()
+      }
+
+      func stop() {
+                stopRadios()
+                session?.disconnect()
+                session?.delegate = nil
+                session = nil
+                connectedPeer = nil
+                hosts = []
                 state = .idle; started = false; outcome = nil
       }
 
       private func resetGame() {
                 position = Position.fromFen(NET_START_FEN)
+                keys = [ChessRules.key(position)]
                 model.load(position); pieces = model.pieces
-                myColor = "w"; flip = false; selected = -1; targets = []
+                flip = myColor == "b"; selected = -1; targets = []
                 lastFrom = -1; lastTo = -1; checkSq = -1; sanList = []
                 started = false; outcome = nil; promotionChoices = nil
+                drawOfferIncoming = false; drawOfferSent = false; drawDeclined = false
+                rematchIncoming = false; rematchSent = false
       }
 
       func resign() {
                 guard started, outcome == nil else { return }
                 send(NetMessage(type: .resign))
                 outcome = .resignedByMe
+      }
+
+      // ---------------- draws / rematch ----------------
+
+      func offerDraw() {
+                guard started, outcome == nil, !drawOfferSent else { return }
+                drawOfferSent = true; drawDeclined = false
+                send(NetMessage(type: .drawOffer))
+      }
+
+      func answerDraw(_ accept: Bool) {
+                guard drawOfferIncoming else { return }
+                drawOfferIncoming = false
+                send(NetMessage(type: accept ? .drawAccept : .drawDecline))
+                if accept && outcome == nil { outcome = .drawAgreed }
+      }
+
+      /// Asks for another game. When both sides have asked, the new game starts with colours swapped.
+      func requestRematch() {
+                guard outcome != nil, state == .connected, !rematchSent else { return }
+                rematchSent = true
+                send(NetMessage(type: .rematch))
+                if rematchIncoming { beginRematch() }
+      }
+
+      private func beginRematch() {
+                // Only the host decides colours and sends .start, so both phones agree.
+                guard isHost else { return }
+                let newHostColor: Character = myColor == "w" ? "b" : "w"
+                myColor = newHostColor
+                resetGame()
+                started = true
+                send(NetMessage(type: .start, fen: NET_START_FEN, hostColor: String(newHostColor)))
       }
 
       // ---------------- moves ----------------
@@ -160,7 +258,7 @@ final class NetPlayManager: NSObject, ObservableObject, BoardDisplaying {
       }
 
       private func applyRemote(uci: String) {
-                guard var m = position.moveFromUci(uci) else { return }
+                guard uci.count >= 4, var m = position.moveFromUci(uci) else { return }
                 let mover = position.turn
                 m.san = position.san(m)
                 position.apply(&m)
@@ -174,71 +272,119 @@ final class NetPlayManager: NSObject, ObservableObject, BoardDisplaying {
                 pieces = model.pieces
                 lastFrom = m.from; lastTo = m.to; selected = -1; targets = []
                 sanList.append(m.san)
-                checkSq = position.inCheck() ? position.kingSq(position.turn) : -1
+                keys.append(ChessRules.key(position))
+                let check = position.inCheck()
+                checkSq = check ? position.kingSq(position.turn) : -1
+                if check { sound?.check() } else if m.captured != EMPTY { sound?.capture() } else { sound?.move() }
+                // A move cancels any pending draw offer.
+                drawOfferIncoming = false; drawOfferSent = false
       }
 
       private func checkOutcome() {
                 guard outcome == nil else { return }
                 if position.legalMoves().isEmpty {
                               if position.inCheck() {
-                                                // The side to move (position.turn) has no legal moves and is in check: that side
-                                                // is checkmated, so whoever that side belongs to lost.
                                                 outcome = (position.turn == myColor) ? .checkmateLoss : .checkmateWin
                               } else {
                                                 outcome = .stalemate
                               }
+                } else if ChessRules.insufficientMaterial(position) {
+                              outcome = .drawInsufficient
+                } else if position.half >= 100 {
+                              outcome = .drawFifty
+                } else if let k = keys.last, keys.filter({ $0 == k }).count >= 3 {
+                              outcome = .drawRepetition
                 }
       }
 
       // ---------------- networking ----------------
 
       private func send(_ msg: NetMessage) {
-                guard !session.connectedPeers.isEmpty, let data = try? JSONEncoder().encode(msg) else { return }
+                guard let session, !session.connectedPeers.isEmpty, let data = try? JSONEncoder().encode(msg) else { return }
                 try? session.send(data, toPeers: session.connectedPeers, with: .reliable)
       }
 
       private func beginIfHost() {
                 guard isHost, state == .connected, !started else { return }
                 myColor = "w"; flip = false; started = true
-                send(NetMessage(type: .start, fen: NET_START_FEN))
+                send(NetMessage(type: .start, fen: NET_START_FEN, hostColor: "w"))
+      }
+
+      fileprivate func handle(_ msg: NetMessage) {
+                switch msg.type {
+                case .start:
+                              guard !isHost else { return }
+                              myColor = msg.hostColor == "w" ? "b" : "w"
+                              resetGame()
+                              position = Position.fromFen(msg.fen.isEmpty ? NET_START_FEN : msg.fen)
+                              keys = [ChessRules.key(position)]
+                              model.load(position); pieces = model.pieces
+                              flip = myColor == "b"
+                              started = true
+                case .move:
+                              applyRemote(uci: msg.uci)
+                case .resign:
+                              if outcome == nil { outcome = .resignedByOpponent }
+                case .drawOffer:
+                              if outcome == nil { drawOfferIncoming = true }
+                case .drawAccept:
+                              if drawOfferSent && outcome == nil { outcome = .drawAgreed }
+                              drawOfferSent = false
+                case .drawDecline:
+                              drawOfferSent = false; drawDeclined = true
+                case .rematch:
+                              rematchIncoming = true
+                              if rematchSent { beginRematch() }
+                }
+      }
+
+      fileprivate func peerChanged(_ peerID: MCPeerID, _ newState: MCSessionState, from s: MCSession) {
+                guard s === session else { return }
+                switch newState {
+                case .connected:
+                              guard connectedPeer == nil else { return }
+                              connectedPeer = peerID
+                              peerName = peerID.displayName
+                              state = .connected
+                              stopRadios()
+                              beginIfHost()
+                case .connecting:
+                              break
+                case .notConnected:
+                              guard connectedPeer == nil || connectedPeer == peerID else { return }
+                              if started, outcome == nil { outcome = .disconnected }
+                              connectedPeer = nil
+                              state = .lost
+                @unknown default:
+                              break
+                }
+      }
+
+      fileprivate func shouldAccept(_ peerID: MCPeerID) -> MCSession? {
+                // One opponent only: refuse further invitations once a game is set up.
+                guard state == .hosting, connectedPeer == nil, let session else { return nil }
+                peerName = peerID.displayName
+                return session
+      }
+
+      fileprivate func found(_ peer: MCPeerID) {
+                guard state == .browsing else { return }
+                if !hosts.contains(where: { $0.peer == peer }) { hosts.append(NearbyHost(peer: peer)) }
+      }
+
+      fileprivate func lost(_ peer: MCPeerID) {
+                hosts.removeAll { $0.peer == peer }
       }
 }
 
 extension NetPlayManager: MCSessionDelegate {
       nonisolated func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {
-                Task { @MainActor in
-                                  switch state {
-                                                case .connected:
-                                                    self.peerName = peerID.displayName
-                                                    self.state = .connected
-                                                    self.advertiser?.stopAdvertisingPeer()
-                                                    self.browser?.stopBrowsingForPeers()
-                                                    self.beginIfHost()
-                                                case .connecting:
-                                                    break
-                                                case .notConnected:
-                                                    if self.started, self.outcome == nil { self.outcome = .disconnected }
-                                                    self.state = .lost
-                                                @unknown default:
-                                                    break
-                                  }
-                     }
+                Task { @MainActor in self.peerChanged(peerID, state, from: session) }
       }
 
       nonisolated func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
                 guard let msg = try? JSONDecoder().decode(NetMessage.self, from: data) else { return }
-                Task { @MainActor in
-                                  switch msg.type {
-                                                case .start:
-                                                    self.myColor = "b"; self.flip = true; self.started = true
-                                                    self.position = Position.fromFen(msg.fen.isEmpty ? NET_START_FEN : msg.fen)
-                                                    self.model.load(self.position); self.pieces = self.model.pieces
-                                                case .move:
-                                                    self.applyRemote(uci: msg.uci)
-                                                case .resign:
-                                                    if self.outcome == nil { self.outcome = .resignedByOpponent }
-                                  }
-                     }
+                Task { @MainActor in self.handle(msg) }
       }
 
       nonisolated func session(_ session: MCSession, didReceive stream: InputStream, withName streamName: String, fromPeer peerID: MCPeerID) {}
@@ -248,16 +394,17 @@ extension NetPlayManager: MCSessionDelegate {
 
 extension NetPlayManager: MCNearbyServiceAdvertiserDelegate {
       nonisolated func advertiser(_ advertiser: MCNearbyServiceAdvertiser, didReceiveInvitationFromPeer peerID: MCPeerID, withContext context: Data?, invitationHandler: @escaping (Bool, MCSession?) -> Void) {
-                Task { @MainActor in invitationHandler(true, self.session) }
+                Task { @MainActor in
+                                  if let s = self.shouldAccept(peerID) { invitationHandler(true, s) } else { invitationHandler(false, nil) }
+                     }
       }
 }
 
 extension NetPlayManager: MCNearbyServiceBrowserDelegate {
       nonisolated func browser(_ browser: MCNearbyServiceBrowser, foundPeer peerID: MCPeerID, withDiscoveryInfo info: [String: String]?) {
-                Task { @MainActor in
-                                  guard self.state == .browsing else { return }
-                                  browser.invitePeer(peerID, to: self.session, withContext: nil, timeout: 15)
-                     }
+                Task { @MainActor in self.found(peerID) }
       }
-      nonisolated func browser(_ browser: MCNearbyServiceBrowser, lostPeer peerID: MCPeerID) {}
+      nonisolated func browser(_ browser: MCNearbyServiceBrowser, lostPeer peerID: MCPeerID) {
+                Task { @MainActor in self.lost(peerID) }
+      }
 }

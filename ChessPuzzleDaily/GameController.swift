@@ -5,7 +5,7 @@ import SwiftUI
 // Kotlin/Compose original. Coroutines + delay() become Swift structured concurrency
 // (Task + Task.sleep); mutableStateOf becomes @Published.
 
-enum Screen { case splash, lang, home, puzzle, archive, stats, settings, lessons, achievements, premium, netLobby, netGame }
+enum Screen { case splash, lang, home, puzzle, archive, stats, settings, lessons, achievements, premium, netLobby, netGame, playSetup, playGame }
 enum Mode { case daily, train, challenge, rush, lesson }
 enum MsgKind { case neutral, ok, bad }
 
@@ -32,6 +32,9 @@ final class GameController: ObservableObject {
     let sound: SoundManager
     let premium = PremiumStore.shared
     let netPlay = NetPlayManager()
+    let localGame = LocalGameManager()
+    /// Where to continue after a successful Premium purchase on the paywall.
+    var afterPremium: Screen = .home
 
     @Published var screen: Screen = .splash
     @Published private(set) var lang: Lang
@@ -76,6 +79,7 @@ final class GameController: ObservableObject {
         self.lang = store.lang ?? .ru
         self.muted = store.muted
         self.boardTheme = store.boardTheme
+        localGame.sound = sound
     }
 
     func today() -> Int {
@@ -87,15 +91,42 @@ final class GameController: ObservableObject {
     func go(_ target: Screen) {
         stopPuzzle(); stopRush()
         if (screen == .netLobby || screen == .netGame) && target != .netLobby && target != .netGame { netPlay.stop() }
+        if screen == .playGame && target != .playGame { localGame.stopThinking() }
         screen = target; tick += 1
         if target == .home { checkFreeze() }
     }
 
+    /// Nearby play: anyone can open the lobby and join a game for free; hosting needs Premium
+    /// (checked in the lobby, see `hostNetGame`).
     func openNetPlay() {
         sound.click()
         netPlay.boardTheme = boardTheme
-        go(premium.isPremium ? .netLobby : .premium)
+        netPlay.sound = sound
+        go(.netLobby)
     }
+
+    func hostNetGame() {
+        if premium.isPremium { netPlay.hostGame() } else { afterPremium = .netLobby; go(.premium) }
+    }
+
+    // ---------- full games on one phone (bot / two players) ----------
+    func openPlay() { sound.click(); go(.playSetup) }
+
+    func startLocalGame(_ mode: LocalMode, humanColor: Character) {
+        if case .bot = mode, !premium.isPremium { afterPremium = .playSetup; go(.premium); return }
+        localGame.boardTheme = boardTheme
+        localGame.start(mode, humanColor: humanColor)
+        go(.playGame)
+    }
+
+    func continueLocalGame() {
+        localGame.boardTheme = boardTheme
+        guard localGame.resume() else { return }
+        if localGame.isBotGame && !premium.isPremium { afterPremium = .playSetup; go(.premium); return }
+        go(.playGame)
+    }
+
+    func rematchLocal() { sound.click(); localGame.rematch() }
 
     @Published private(set) var freezeOffer: Int? = nil
     private var freezeAskedToday = -1

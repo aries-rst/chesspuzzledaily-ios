@@ -145,9 +145,11 @@ struct RootView: View {
                 case .premium: PremiumScreen(c: c, premium: c.premium)
                 case .netLobby: NetLobbyScreen(c: c, net: c.netPlay)
                 case .netGame: NetGameScreen(c: c, net: c.netPlay)
+                case .playSetup: PlaySetupScreen(c: c, game: c.localGame)
+                case .playGame: PlayGameScreen(c: c, game: c.localGame)
                 }
             }
-            .frame(maxWidth: (c.screen == .puzzle || c.screen == .netGame) ? .infinity : 560)
+            .frame(maxWidth: (c.screen == .puzzle || c.screen == .netGame || c.screen == .playGame) ? .infinity : 560)
             .frame(maxWidth: .infinity, alignment: .top)
 
             if let moves = c.promotionChoices { PromotionDialog(c: c, moves: moves) }
@@ -264,7 +266,10 @@ struct HomeScreen: View {
                     AltButton(text: "📚 \(s.lessons)") { c.sound.click(); c.go(.lessons) }
                 }
                 Spacer().frame(height: 10)
-                AltButton(text: c.premium.isPremium ? "📡 \(c.lang == .ru ? "Играть рядом" : "Play Nearby")" : "📡 \(c.lang == .ru ? "Играть рядом" : "Play Nearby") 👑") { c.openNetPlay() }
+                HStack(spacing: 10) {
+                    AltButton(text: "♟️ \(c.lang == .ru ? "Партия" : "Play")") { c.openPlay() }
+                    AltButton(text: "📡 \(c.lang == .ru ? "Играть рядом" : "Play Nearby")") { c.openNetPlay() }
+                }
                 Spacer().frame(height: 10)
                 HStack(spacing: 10) {
                     AltButton(text: "📅 \(s.archive)") { c.sound.click(); c.go(.archive) }
