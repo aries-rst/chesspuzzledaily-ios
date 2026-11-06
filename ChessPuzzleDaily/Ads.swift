@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import UIKit
 import GoogleMobileAds
+import AppTrackingTransparency
 
 // Port of AdManager.kt — real Google Mobile Ads SDK wiring, same shape as the Android build:
 // a banner on the home screen only, an interstitial every few training/rush rounds, and a
@@ -12,7 +13,7 @@ import GoogleMobileAds
 // build is still effectively "release", so a debug-only flag wouldn't protect testers the way it
 // does on Android. While `adsEnabled` is false: the SDK never starts, the banner renders nothing,
 // interstitials continue instantly, and rewarded ads grant the reward instantly.
-let adsEnabled = false
+let adsEnabled = true
 
 /// True once the player owns "premium" (see Premium.swift) — ads stay off for them even once
 /// `adsEnabled` above is flipped to true for everyone else.
@@ -35,7 +36,19 @@ enum AdsInit {
         /// Starts the Google Mobile Ads SDK once and preloads the first interstitial/rewarded ad.
         /// No-op while `adsEnabled` is false. Call once at app launch.
         static func start() {
-                    guard adsEnabled, !premiumActive, !ready else { return }
+                    guard adsEnabled, !premiumActive, !ready, !startRequested else { return }
+                    startRequested = true
+                    // Ask for App Tracking Transparency once the UI is on screen, then start the SDK.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                        ATTrackingManager.requestTrackingAuthorization { _ in
+                            DispatchQueue.main.async { startSDK() }
+                        }
+                    }
+        }
+
+        private static var startRequested = false
+
+        private static func startSDK() {
                     MobileAds.shared.start { _ in
                                                         Task { @MainActor in
                                                                               ready = true
